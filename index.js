@@ -46,6 +46,8 @@ function loadAndWriteAllProductsInfo() {
   const lastRow = sheet.getLastRow();
   const existingDataB = {};
   const existingDataD = {};
+  const existingFormulas = {}; // Сохраняем формулы
+  const existingOrder = []; // Сохраняем порядок строк
   
   if (lastRow >= 6) {
     const numRows = lastRow - 5;
@@ -55,41 +57,142 @@ function loadAndWriteAllProductsInfo() {
     const artikulIdValues = artikulIdRange.getValues();
     const finalPriceRange = sheet.getRange(6, 4, numRows, 1);
     const finalPriceValues = finalPriceRange.getValues();
+    const finalPriceFormulas = finalPriceRange.getFormulas(); // Получаем формулы
     
     for (let i = 0; i < offerIdValues.length; i++) {
       const offerId = offerIdValues[i][0];
       if (offerId) {
         existingDataB[offerId] = artikulIdValues[i][0] || '';
         existingDataD[offerId] = finalPriceValues[i][0] || '';
+        // Сохраняем формулу если она есть
+        if (finalPriceFormulas[i][0]) {
+          existingFormulas[offerId] = finalPriceFormulas[i][0];
+        }
+        existingOrder.push(offerId);
+      } else {
+        existingOrder.push(null); // Пустая строка
       }
     }
   }
 
-  const rows = productsFlatCollection.map(product => {
-    const offerId = product.offer_id || '';
-    const productId = product.id || '';
-    const marketingPrice = product.marketing_price ? Number(product.marketing_price) : 0;
-    const price = product.price ? Number(product.price) : 0;
-
-    const finalPrice = Math.round(marketingPrice * (1 - walletPercent / 100));
-    const cofinancingPercent = price ? parseFloat(((price - marketingPrice) / price * 100).toFixed(2)) : 0;
-
-    const existingArtikulId = existingDataB[offerId] || '';
-    const existingFinalPrice = existingDataD[offerId] || '';
-
-    return [
-      offerId,
-      existingArtikulId,
-      productId,
-      existingFinalPrice,
-      Math.round(marketingPrice) + ' ₽',
-      cofinancingPercent + '%',
-      Math.round(price) + ' ₽'
-    ];
+  // Создаем карту продуктов для быстрого поиска
+  const productsMap = new Map();
+  productsFlatCollection.forEach(product => {
+    if (product.offer_id) {
+      productsMap.set(product.offer_id, product);
+    }
   });
+
+  const rows = [];
+  
+  // Если есть существующий порядок, используем его
+  if (existingOrder.length > 0) {
+    existingOrder.forEach(offerId => {
+      if (offerId === null) {
+        // Пустая строка
+        rows.push(['', '', '', '', '', '', '']);
+      } else {
+        const product = productsMap.get(offerId);
+        if (product) {
+          const productId = product.id || '';
+          const marketingPrice = product.marketing_price ? Number(product.marketing_price) : 0;
+          const price = product.price ? Number(product.price) : 0;
+          
+          const cofinancingPercent = price ? parseFloat(((price - marketingPrice) / price * 100).toFixed(2)) : 0;
+          
+          const existingArtikulId = existingDataB[offerId] || '';
+          const existingFinalPrice = existingDataD[offerId] || '';
+          
+          rows.push([
+            offerId,
+            existingArtikulId,
+            productId,
+            existingFinalPrice,
+            Math.round(marketingPrice) + ' ₽',
+            cofinancingPercent.toString().replace('.', ',') + '%', // Число с % и запятой вместо точки
+            Math.round(price) + ' ₽'
+          ]);
+        } else {
+          // Товар не найден в новых данных, но оставляем строку
+          const existingArtikulId = existingDataB[offerId] || '';
+          const existingFinalPrice = existingDataD[offerId] || '';
+          
+          rows.push([
+            offerId,
+            existingArtikulId,
+            '',
+            existingFinalPrice,
+            '',
+            '',
+            ''
+          ]);
+        }
+      }
+    });
+    
+    // Добавляем новые товары, которых не было в существующих данных
+    productsFlatCollection.forEach(product => {
+      const offerId = product.offer_id || '';
+      if (offerId && !existingDataB.hasOwnProperty(offerId)) {
+        const productId = product.id || '';
+        const marketingPrice = product.marketing_price ? Number(product.marketing_price) : 0;
+        const price = product.price ? Number(product.price) : 0;
+        
+        const cofinancingPercent = price ? parseFloat(((price - marketingPrice) / price * 100).toFixed(2)) : 0;
+        
+        rows.push([
+          offerId,
+          '',
+          productId,
+          '',
+          Math.round(marketingPrice) + ' ₽',
+          cofinancingPercent.toString().replace('.', ',') + '%', // Число с % и запятой вместо точки
+          Math.round(price) + ' ₽'
+        ]);
+      }
+    });
+  } else {
+    // Если нет существующих данных, создаем новые строки
+    productsFlatCollection.forEach(product => {
+      const offerId = product.offer_id || '';
+      const productId = product.id || '';
+      const marketingPrice = product.marketing_price ? Number(product.marketing_price) : 0;
+      const price = product.price ? Number(product.price) : 0;
+      
+      const cofinancingPercent = price ? Math.round((price - marketingPrice) / price * 100) : 0; // Округляем до целого
+      
+      rows.push([
+        offerId,
+        '',
+        productId,
+        '',
+        Math.round(marketingPrice) + ' ₽',
+        cofinancingPercent, // Теперь это число, а не строка с %
+        Math.round(price) + ' ₽'
+      ]);
+    });
+  }
 
   const productsInfoGrid = [header, ...rows];
   writeGridToTable(productsInfoGrid, sheet.getName());
+  
+  // Восстанавливаем формулы после записи данных
+  if (Object.keys(existingFormulas).length > 0) {
+    const currentLastRow = sheet.getLastRow();
+    if (currentLastRow >= 6) {
+      const currentNumRows = currentLastRow - 5;
+      const currentOfferIdRange = sheet.getRange(6, 1, currentNumRows, 1);
+      const currentOfferIdValues = currentOfferIdRange.getValues();
+      
+      for (let i = 0; i < currentOfferIdValues.length; i++) {
+        const offerId = currentOfferIdValues[i][0];
+        if (offerId && existingFormulas[offerId]) {
+          const cellRange = sheet.getRange(6 + i, 4); // Столбец D (4)
+          cellRange.setFormula(existingFormulas[offerId]);
+        }
+      }
+    }
+  }
 }
 
 function loadAndWriteProductsByIds() {
@@ -117,6 +220,10 @@ function loadAndWriteProductsByIds() {
   const numRows = lastRow - 5;
   const productIdRange = sheet.getRange(6, 3, numRows, 1);
   const productIdValues = productIdRange.getValues();
+  
+  // Сохраняем формулы из столбца D перед парсингом
+  const finalPriceRange = sheet.getRange(6, 4, numRows, 1);
+  const finalPriceFormulas = finalPriceRange.getFormulas();
   
   const productIdsWithPositions = [];
   productIdValues.forEach((row, index) => {
@@ -168,7 +275,6 @@ function loadAndWriteProductsByIds() {
     const offerIdValues = offerIdRange.getValues();
     const artikulIdRange = sheet.getRange(6, 2, numRows, 1);
     const artikulIdValues = artikulIdRange.getValues();
-    const finalPriceRange = sheet.getRange(6, 4, numRows, 1);
     const finalPriceValues = finalPriceRange.getValues();
     
     for (let i = 0; i < offerIdValues.length; i++) {
@@ -194,7 +300,6 @@ function loadAndWriteProductsByIds() {
         const marketingPrice = product.marketing_price ? Number(product.marketing_price) : 0;
         const price = product.price ? Number(product.price) : 0;
 
-        const finalPrice = Math.round(marketingPrice * (1 - walletPercent / 100));
         const cofinancingPercent = price ? parseFloat(((price - marketingPrice) / price * 100).toFixed(2)) : 0;
 
         const existingArtikulId = existingDataB[offerId] || '';
@@ -206,7 +311,7 @@ function loadAndWriteProductsByIds() {
           productId,
           existingFinalPrice,
           Math.round(marketingPrice) + ' ₽',
-          cofinancingPercent + '%',
+          cofinancingPercent + '%', // Теперь это число с % и двумя знаками после запятой
           Math.round(price) + ' ₽'
         ]);
       } else {
@@ -230,6 +335,14 @@ function loadAndWriteProductsByIds() {
 
   const productsInfoGrid = [header, ...rows];
   writeGridToTable(productsInfoGrid, sheet.getName());
+  
+  // Восстанавливаем формулы после записи данных
+  for (let i = 0; i < finalPriceFormulas.length; i++) {
+    if (finalPriceFormulas[i][0]) {
+      const cellRange = sheet.getRange(6 + i, 4); // Столбец D (4)
+      cellRange.setFormula(finalPriceFormulas[i][0]);
+    }
+  }
 }
 
 function onOpen(e) {
